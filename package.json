@@ -1,0 +1,30 @@
+{
+  "name": "acgam-t02p",
+  "version": "0.0.1",
+  "description": "ACGAM T02P Treadmill BLE communication library",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vViktorPL/acgam-t02p-node.git"
+  },
+  "keywords": [
+    "treadmill",
+    "bluetooth",
+    "acgam"
+  ],
+  "author": "Wiktor Toporek <wtoporek@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/vViktorPL/acgam-t02p-node/issues"
+  },
+  "homepage": "https://github.com/vViktorPL/acgam-t02p-node#readme",
+  "devDependencies": {
+    "@types/node": "^18.11.18",
+    "typescript": "^4.9.4"
+  }
+}
