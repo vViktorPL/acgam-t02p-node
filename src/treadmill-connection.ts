@@ -1,64 +1,72 @@
-import {ChildProcessWithoutNullStreams, exec, spawn} from 'child_process';
+import {createBluetooth} from 'node-ble';
+
 import { BluetoothDeviceAddress } from './bluetooth-device-address';
-import * as readline from "readline";
 import {TreadmillStatus} from "./treadmill-status";
 import {parseTreadmillNotificationData} from "./treadmill-notification-data-parser";
+import * as NodeBle from "node-ble";
 
 export type TreadmillStatusNotificationListener = (status: TreadmillStatus) => void;
 
-const TREADMILL_DATA_NOTIFICATION_LINE_DATA_PREFIX = 'Notification handle = 0x0008 value: ';
+
+const ACGAM_NOTIFICATION_SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+const ACGAM_NOTIFICATION_CHARACTERISTICS_UUID = '0000fff1-0000-1000-8000-00805f9b34fb';
 
 export class TreadmillConnection {
+  private bluetoothInstance: ReturnType<typeof createBluetooth>;
+  private bluetoothAdapter: NodeBle.Adapter | null = null;
+  private treadmillDevice: NodeBle.Device | null = null;
+  private dataCharacteristic: NodeBle.GattCharacteristic | null = null;
+
   private address: BluetoothDeviceAddress | null = null;
-  private connected: boolean = false;
-  private gattProcess: ChildProcessWithoutNullStreams;
-  private gattProcessLineReader: readline.Interface;
   private notificationListeners: TreadmillStatusNotificationListener[] = [];
-  private lastNotificationTogglePromise: Promise<boolean> = Promise.resolve(false);
-  private notificationLineListener: ((lineData: string) => void) | null = null;
+
+  private connectionPromise: Promise<void> | null = null;
 
   private constructor() {
-    this.gattProcess = spawn('gatttool', ['-I', '--listen']);
-    this.gattProcessLineReader = readline.createInterface({
-      input: this.gattProcess.stdout,
-    });
-
+    this.bluetoothInstance = createBluetooth();
   }
 
-  private connect(deviceAddress: BluetoothDeviceAddress): Promise<this> {
+  private async connect(deviceAddress: BluetoothDeviceAddress): Promise<this> {
+    if (!this.bluetoothAdapter) {
+      this.bluetoothAdapter = await this.bluetoothInstance.bluetooth.defaultAdapter();
+    }
+
+    const adapter = this.bluetoothAdapter;
+
+    if (!await adapter.isDiscovering()) {
+      await adapter.startDiscovery();
+    }
+
     this.address = deviceAddress;
 
-    return new Promise(resolve => {
-      const connectionSuccessfulLineListener = (lineData: string) => {
-        if (lineData.includes('Connection successful')) {
-          this.connected = true;
-          this.gattProcessLineReader.off('line', connectionSuccessfulLineListener);
-          resolve(this);
-        }
-      };
+    this.treadmillDevice = await adapter.waitDevice(deviceAddress.toString());
+    this.treadmillDevice.on('disconnect', () => {
+      if (this.dataCharacteristic) {
+        this.dataCharacteristic.stopNotifications();
+        this.dataCharacteristic.removeAllListeners('valuechanged');
+        this.dataCharacteristic = null;
+      }
 
-      this.gattProcessLineReader.on('line', connectionSuccessfulLineListener);
+      this.notificationListeners.forEach(
+        listener => listener({
+          status: 'DISCONNECTED',
+        })
+      );
 
-      this.gattProcess.stdin.cork();
-      this.gattProcess.stdin.write(`connect ${this.address!.toString()}\n`);
-      this.gattProcess.stdin.uncork();
-    });
-  }
+      if (!this.connectionPromise) {
+        this.connectionPromise = this.tryConnecting();
+      }
+    })
+    this.treadmillDevice.on('connect', async () => {
+      if (this.connectionPromise) {
+        this.connectionPromise = null;
+      }
 
-  addStatusNotificationEventListener(listener: TreadmillStatusNotificationListener) {
-    if (this.notificationLineListener === null) {
-      this.notificationLineListener = (lineData: string) => {
-        const lineDataUnformatted = lineData.substring(3);
-
-        if (!lineDataUnformatted.startsWith(TREADMILL_DATA_NOTIFICATION_LINE_DATA_PREFIX)) {
-          return;
-        }
-
-        const msgHexCodes = lineDataUnformatted.substring(TREADMILL_DATA_NOTIFICATION_LINE_DATA_PREFIX.length).split(' ');
-        msgHexCodes.pop();
-
-        const msgBuffer = Buffer.from(msgHexCodes.map(byte => parseInt(byte, 16)));
-        const parsedStatus = parseTreadmillNotificationData(msgBuffer);
+      const gattServer = await this.treadmillDevice!.gatt();
+      const service = await gattServer.getPrimaryService(ACGAM_NOTIFICATION_SERVICE_UUID);
+      this.dataCharacteristic = await service.getCharacteristic(ACGAM_NOTIFICATION_CHARACTERISTICS_UUID);
+      this.dataCharacteristic.on('valuechanged', buffer => {
+        const parsedStatus = parseTreadmillNotificationData(buffer);
 
         if (!parsedStatus) {
           return;
@@ -67,15 +75,35 @@ export class TreadmillConnection {
         this.notificationListeners.forEach(
           listener => listener(parsedStatus)
         );
-      };
-      this.notificationLineListener = this.notificationLineListener.bind(this);
+      });
+
+      if (this.notificationListeners.length > 0) {
+        await this.dataCharacteristic.startNotifications();
+      }
+    })
+
+    await this.tryConnecting();
+
+    return this;
+  }
+
+  private async tryConnecting() {
+    if (!this.treadmillDevice) {
+      throw Error('No device to connect');
     }
 
+    let connected = false;
+    while (!connected) {
+      connected = await this.treadmillDevice.connect().then(() => true).catch(() => false)
+    }
+  }
+
+
+  addStatusNotificationEventListener(listener: TreadmillStatusNotificationListener) {
     this.notificationListeners.push(listener);
 
-    if (this.notificationListeners.length === 1) {
-      this.gattProcessLineReader.on('line', this.notificationLineListener);
-      void this.toggleNotifications(true);
+    if (this.dataCharacteristic && this.notificationListeners.length === 1) {
+      void this.dataCharacteristic.startNotifications();
     }
   }
 
@@ -88,55 +116,20 @@ export class TreadmillConnection {
 
     this.notificationListeners.splice(listenerIndex, 1);
 
-    if (this.notificationListeners.length === 0) {
-      if (this.notificationLineListener) {
-        this.gattProcessLineReader.off('line', this.notificationLineListener);
-      }
-      void this.toggleNotifications(false);
+    if (this.notificationListeners.length === 0 && this.dataCharacteristic) {
+      void this.dataCharacteristic.stopNotifications();
     }
   }
 
-  disconnect() {
-    if (this.connected) {
-      this.gattProcess.stdin.cork();
-      this.gattProcess.stdin.write('disconnect\n');
-      this.gattProcess.stdin.uncork();
+  async disconnect() {
+    if (this.treadmillDevice) {
+      await this.treadmillDevice.disconnect();
+      this.treadmillDevice = null;
     }
-
-    this.connected = false;
-    this.gattProcessLineReader.close();
-    this.gattProcess.stdin.destroy();
-    this.gattProcess.stderr.destroy();
-    this.gattProcess.kill('SIGKILL');
   }
 
-  private async toggleNotifications(state: boolean) {
-    if (!this.connected) {
-      throw new Error('Cannot subscribe to treadmill data notifications when disconnected');
-    }
-
-    const lastState = await this.lastNotificationTogglePromise;
-
-    if (lastState === state) {
-      return lastState;
-    }
-
-    this.lastNotificationTogglePromise = new Promise(resolve => {
-      const successfulSubscriptionLineListener = (lineData: string) => {
-        if (lineData === 'Characteristic value was written successfully') {
-          this.gattProcessLineReader.off('line', successfulSubscriptionLineListener);
-          resolve(state);
-        }
-      };
-
-      this.gattProcessLineReader.on('line', successfulSubscriptionLineListener);
-
-      this.gattProcess.stdin.cork();
-      this.gattProcess.stdin.write(`char-write-req 9 ${state ? '01' : '00'}\n`);
-      this.gattProcess.stdin.uncork();
-    });
-
-    return this.lastNotificationTogglePromise;
+  destroy() {
+    this.bluetoothInstance.destroy();
   }
 
   static forAddress(deviceAddress: BluetoothDeviceAddress): Promise<TreadmillConnection> {

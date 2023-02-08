@@ -4,6 +4,7 @@ export type TreadmillStatus
   | { status: 'WAKING_UP' }
   | { status: 'PRESTART' }
   | { status: 'STARTING'; countdown: number }
+  | { status: 'DISCONNECTED' }
   | {
       status: 'RUNNING' | 'STOPPING';
       elapsedSeconds: number;
