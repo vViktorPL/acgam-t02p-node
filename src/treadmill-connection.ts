@@ -40,10 +40,14 @@ export class TreadmillConnection {
     this.address = deviceAddress;
 
     this.treadmillDevice = await adapter.waitDevice(deviceAddress.toString());
-    this.treadmillDevice.on('disconnect', () => {
+    this.treadmillDevice.on('disconnect', async () => {
+      console.log('disconnect');
       if (this.dataCharacteristic) {
-        this.dataCharacteristic.stopNotifications();
+        console.log('removeAllListeners("valuechanged")');
         this.dataCharacteristic.removeAllListeners('valuechanged');
+        console.log('stopNotifications()');
+        await this.dataCharacteristic.stopNotifications();
+        console.log('stopNotifications() success');
         this.dataCharacteristic = null;
       }
 
@@ -58,6 +62,7 @@ export class TreadmillConnection {
       }
     })
     this.treadmillDevice.on('connect', async () => {
+      console.log('connect');
       if (this.connectionPromise) {
         this.connectionPromise = null;
       }
@@ -65,7 +70,8 @@ export class TreadmillConnection {
       const gattServer = await this.treadmillDevice!.gatt();
       const service = await gattServer.getPrimaryService(ACGAM_NOTIFICATION_SERVICE_UUID);
       this.dataCharacteristic = await service.getCharacteristic(ACGAM_NOTIFICATION_CHARACTERISTICS_UUID);
-      this.dataCharacteristic.on('valuechanged', buffer => {
+      console.log('addListener "valuechanged"');
+      this.dataCharacteristic.addListener('valuechanged', buffer => {
         const parsedStatus = parseTreadmillNotificationData(buffer);
 
         if (!parsedStatus) {
@@ -78,6 +84,7 @@ export class TreadmillConnection {
       });
 
       if (this.notificationListeners.length > 0) {
+        console.log('startNotifications()');
         await this.dataCharacteristic.startNotifications();
       }
     })
@@ -88,13 +95,16 @@ export class TreadmillConnection {
   }
 
   private async tryConnecting() {
+    console.log('tryConnecting()');
     if (!this.treadmillDevice) {
       throw Error('No device to connect');
     }
 
     let connected = false;
     while (!connected) {
+      console.log('connect');
       connected = await this.treadmillDevice.connect().then(() => true).catch(() => false)
+      console.log({ connected });
     }
   }
 
