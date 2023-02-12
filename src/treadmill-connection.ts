@@ -94,7 +94,12 @@ export class TreadmillConnection {
 
     let connected = false;
     while (!connected) {
-      connected = await this.treadmillDevice.connect().then(() => true).catch(() => false)
+      connected = await this.treadmillDevice.connect()
+        .then(() => true)
+        .catch(async () => {
+          await this.treadmillDevice?.disconnect();
+          return false;
+        });
     }
   }
 
