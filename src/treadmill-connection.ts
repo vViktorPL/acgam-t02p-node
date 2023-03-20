@@ -138,6 +138,11 @@ export class TreadmillConnection {
   }
 
   static forAddress(deviceAddress: BluetoothDeviceAddress): Promise<TreadmillConnection> {
-    return (new TreadmillConnection()).connect(deviceAddress);
+    const connection = new TreadmillConnection();
+    return connection.connect(deviceAddress).catch(error => {
+      connection.destroy();
+
+      throw error;
+    });
   }
 }
