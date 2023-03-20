@@ -5,12 +5,6 @@
 It can be easily used for instance on Raspberry Pi 4 with Raspbian OS
 to grab live stats from your treadmill.
 
-## Prerequisites
-
-This library wraps `gatttool` CLI tool which is often included
-in [BlueZ](http://www.bluez.org/) Linux packages, so it requires
-`gatttool` to be available in your OS. For instance
-
 ## Installation
 
 ```bash
