@@ -134,6 +134,8 @@ export class TreadmillConnection {
   }
 
   destroy() {
+    this.dataCharacteristic?.removeAllListeners();
+    this.treadmillDevice?.removeAllListeners();
     this.bluetoothInstance.destroy();
   }
 
